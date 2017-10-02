@@ -90,14 +90,13 @@ class Station( Thread ):
         self.running = False
 
     def transmit(self):
-        print("trying to transmit frame")
         self.sender.transmit = True
 
     def DIFS_trigger(self):
         if not self.sender.empty():
+
             back_off = random.randint( 0, CW*self.back_off_multiplier )*SLOT
             self.back_off_countdown.start( back_off )
-
 
     def SIFS_trigger(self):
         if self.ack:
@@ -196,17 +195,18 @@ class Medium( Thread ):
                     tx = None
 
                 
-        
-                communication_tally.append(tx)
+                if tx:
+                    communication_tally.append(tx)
 
             if len( communication_tally ) > 1:
-                print("We have a collision, same back off")
-                pass
+                print("We have a collision, same back off", communication_tally)
+
             elif self.Traverse_countdown:
                 print("We have a collision")
                 
-            else:
-                self.traverse_medium(tx)
+            elif len(communication_tally) == 1:
+                
+                self.traverse_medium(communication_tally[0])
             
 
             
@@ -333,8 +333,8 @@ def main():
     shared_medium.start()
     print("Attempting to send")
     A.send("B")
-    C.send("D")
-    time.sleep(1)   
+    #C.send("D")
+    time.sleep(5)   
 
     A.kill()
     A.join()

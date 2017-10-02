@@ -10,6 +10,7 @@ class count_down:
         self.args = args
         self.name = name
         self.timing = False
+        self.frozen = False
 
     def __call__(self):
         
@@ -20,7 +21,8 @@ class count_down:
                 self.fxn( *self.args )
 
             else:
-                self.count -= 1
+                if not self.frozen:
+                    self.count -= 1
 
         return self.count
 
@@ -29,22 +31,27 @@ class count_down:
     def __bool__( self ):
         return self.timing
 
-    def start( self, top=None ):
+    def start( self, top=None, fxn=None, *args ):
         if top:
             self.top = top
         if self.top == None:
             raise ValueError("Need to set top of timer")
+        
+        if fxn:
+           self.fxn = fxn
+           self.args = args
+
         self.count = self.top
         self.timing = True
 
     def freeze( self ):
-        self.timing = False
+        self.frozen = True
         
     def unfreeze( self ):
-        self.timing = True
+        self.frozen = False
 
     def __repr__( self ):
-        return "<count_down:{} counter:{} timing:{}>".format(self.name, self.count, self.timing)
+        return "<count_down:{} counter:{} timing:{} frozen:{}>".format(self.name, self.count, self.timing, self.frozen)
 
     def __int__(self):
         return self.count
@@ -94,7 +101,7 @@ class Counter:
             print( self.__repr__() )
             for cntdwner in self.count_downers:
                 if cntdwner: print( "\t", cntdwner )
-                #else: print("\t", cntdwner)
+                else: print("\t", cntdwner)
                 cntdwner()
             yield self.count
 
