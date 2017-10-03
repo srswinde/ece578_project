@@ -45,10 +45,12 @@ class count_down:
         self.timing = True
 
     def freeze( self ):
-        self.frozen = True
+        if not self.frozen:
+            self.frozen = True
         
     def unfreeze( self ):
-        self.frozen = False
+        if self.frozen:
+            self.frozen = False
 
     def __repr__( self ):
         return "<count_down:{} counter:{} timing:{} frozen:{}>".format(self.name, self.count, self.timing, self.frozen)
@@ -66,7 +68,7 @@ class count_down:
     def __lt__(self, val):
         if self.timing:
             True
-        if self.coutn < val:
+        if self.count < val:
             return True
         else:
             return False
@@ -98,10 +100,12 @@ class Counter:
 
             self.count+= 1
             self.count%= self.max_count
+
             print( self.__repr__() )
+
             for cntdwner in self.count_downers:
                 if cntdwner: print( "\t", cntdwner )
-                else: print("\t", cntdwner)
+                #else: print("\t", cntdwner)
                 cntdwner()
             yield self.count
 

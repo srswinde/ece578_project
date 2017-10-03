@@ -7,6 +7,8 @@ import random
 import math
 from counters import count_down, Counter
 import copy
+import sys
+import uuid
 
 # time in micro seconds
 SLOT = 20
@@ -47,25 +49,34 @@ class Station( Thread ):
         self.back_off_multiplier = 1
         self.back_off_countdown = count_down(CW, "Sation {} Back Off".format(name), self.transmit)
         self.medium.register( self )
+        self.sent_frames = []
 
     def run( self ):
         self.running = True
         
         while self.running:
-            time.sleep(0.01)
-            if self.medium.idle:
-                #make sure we are not frozen
-                self.back_off_countdown.unfreeze()
-            else:
-                self.back_off_countdown.freeze()
+            time.sleep(0.001) #Give the processer breathing room. 
 
+            self.check_medium_to_freeze()
 
             rx = self.recv()
             if rx:
                 if rx.tx_type == "Frame":
                     self.ack = Ack( rx.receiver, rx.sender )
                 elif rx.tx_type == "Ack":
-                    pass
+                    rm = None
+                    print("{} received Ack {}".format(self.__repr__(), rx) )
+
+                    for ii in range(len(self.sent_frames)):
+                        if rx.uuid == self.sent_frames[ii]:
+                            rm = ii
+                            break
+                    if rm:
+                        self.sent_frames.pop(rm)
+
+
+
+
     def __repr__(self):
         return "<Station {}>".format(self.name)
 
@@ -81,6 +92,19 @@ class Station( Thread ):
 
         return tx
 
+    def check_medium_to_freeze( self ):
+
+        """if we are planning to transmit and 
+        the medium becomes not idle freeze
+        the countdown"""
+        if not self.medium.idle:
+            if self.back_off_countdown:
+                self.back_off_countdown.freeze()
+        else:
+            self.back_off_countdown.unfreeze()
+
+
+
     def send(self, station):
         # put the frame in the send queue
         self.sender.put( Frame( self.name, station ), False )
@@ -90,17 +114,22 @@ class Station( Thread ):
         self.running = False
 
     def transmit(self):
+
         self.sender.transmit = True
 
     def DIFS_trigger(self):
         if not self.sender.empty():
-
+            
             back_off = random.randint( 0, CW*self.back_off_multiplier )*SLOT
+            if back_off < SLOT:
+                print("BACK_OFF is {}".format(back_off), file=sys.stderr)
             self.back_off_countdown.start( back_off )
 
     def SIFS_trigger(self):
         if self.ack:
-            self.ack_transmit = True
+            self.sender.put(self.ack)
+            self.ack = None
+            self.ack_transmit=True
 
 
 class Medium( Thread ):
@@ -123,7 +152,7 @@ class Medium( Thread ):
 
         self.counter= Counter( 5000, self.DIFS_countdown, self.SIFS_countdown, self.Traverse_countdown )
 
-        self.idle = False
+        self.idle = True
 
 
     def DIFS_trigger(self):
@@ -156,7 +185,7 @@ class Medium( Thread ):
         self.running = True
         first_loop = True
         for count in self.counter:
-            time.sleep(0.01)
+            time.sleep(0.001)
 
             if count == None:
                 break
@@ -173,11 +202,9 @@ class Medium( Thread ):
                     continue
 
             if self.DIFS_countdown: # In Difs state
-                self.idle = False
                 continue
 
             elif self.SIFS_countdown: # In SIFS state
-                self.idle = False
                 continue
 
             elif self.Traverse_countdown: # Waiting for tx to traverse medium
@@ -197,15 +224,18 @@ class Medium( Thread ):
                 
                 if tx:
                     communication_tally.append(tx)
-
-            if len( communication_tally ) > 1:
+            if len( communication_tally ) > 1: 
+                #two communications came in at same time
+                # probably due to same back off time.
+                                               
                 print("We have a collision, same back off", communication_tally)
 
-            elif self.Traverse_countdown:
+            elif self.Traverse_countdown and len(communication_tally) == 1 :
+
                 print("We have a collision")
                 
             elif len(communication_tally) == 1:
-                
+                print("comm tally is", communication_tally)
                 self.traverse_medium(communication_tally[0])
             
 
@@ -216,13 +246,14 @@ class Medium( Thread ):
         tx_time_s = frm.size*8/TX_RATE 
         tx_time_microseconds = tx_time_s*1e6
 
-
+        print("{} is traversing".format(frm))
         self.Traverse_countdown.start( tx_time_microseconds, self.connect_the_pipe, frm )
 
     def connect_the_pipe(self, frm):
         for station in self.stations:
 
-            station['rx'].put(frm)
+            station.receiver.put(frm)
+        self.SIFS_countdown.start( SIFS )
 
     def kill(self):
         self.running = False
@@ -240,8 +271,10 @@ class Connection(Queue):
 
 
     def __init__(self, owner=None ):
+        self.Traverse_countdown = count_down(top=None, name="Traverse")
         self.owner = owner
-        if self.owner:
+        if not self.owner:
+
             self.transmit = True
         else:
             self.transmit = False
@@ -257,23 +290,20 @@ class Connection(Queue):
         triggered by the DIFS and SIFS trigger 
         function respectively"""
         if self.owner:
-            if self.owner.ack_transmit:
-            
-                resp = copy.deepcopy( self.owner.ack )
-                self.owner.ack = None
-                self.owner.ack_transmit = False
-            
 
-            if self.transmit:
-                return super().get( *args, **kwargs )
-                self.transmit = False
-            else:
-                raise Empty
+            
+            
+            data = super().get( *args, **kwargs )
+            self.owner.sent_frames.append( data )
+            self.transmit = False
+            return data
+            
         else:
             return super().get( *args, **kwargs )
 
 
     def put( self, msg, *args, **kwargs ):
+        print("the msg put is {}".format(msg) )
         super().put( msg, *args, **kwargs )
 
     
@@ -286,9 +316,10 @@ class Transmission():
     def __init__( self, sender, receiver ):
         self.sender = sender # address or name of sender.
         self.receiver = receiver #address or name of receiver.
+        self.uuid = uuid.uuid4()
 
     def __repr__(self):
-        return "<Frame sender: {} recver: {}>".format(self.sender, self.receiver)
+        return "<Frame sender: {} recver: {} tx_type:{}>".format(self.sender, self.receiver, self.tx_type)
 
 
 
@@ -331,10 +362,10 @@ def main():
     C.start()
     D.start()
     shared_medium.start()
-    print("Attempting to send")
-    A.send("B")
-    #C.send("D")
-    time.sleep(5)   
+    print( "Attempting to send" )
+    A.send( "B" )
+    #C.send( "D" )
+    time.sleep( 5 )   
 
     A.kill()
     A.join()
