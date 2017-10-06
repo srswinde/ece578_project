@@ -27,7 +27,9 @@ class count_down:
         return self.count
 
 
-        
+    def cancel(self):
+        self.timing = 0
+        self.count  = self.top
     def __bool__( self ):
         return self.timing
 
@@ -101,16 +103,21 @@ class Counter:
             self.count+= 1
             self.count%= self.max_count
 
-            print( self.__repr__() )
 
             for cntdwner in self.count_downers:
-                if cntdwner: print( "\t", cntdwner )
+                #print( cntdwner )
+                cntdwner()
+                #if cntdwner: print( "\t", cntdwner )
                 #else: print("\t", cntdwner)
                 cntdwner()
             yield self.count
 
     def kill(self):
         self.counting = False
+
+
+    def idle_stuff(self):
+        pass
 
     def __repr__(self):
         return "{} micro seconds".format(self.count)

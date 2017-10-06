@@ -33,6 +33,72 @@ MAX_COUNT = 5000
 
 FRAME_TX_TIME = FRAME
 
+ 
+
+class Station2:
+    def __init__(self, name, medium):
+        self.medium = medium
+        self.name = name
+        self.receiver = Queue()
+        self.backoff_countdown = count_down( top=None, name="{} Back Off".format(self.__repr__()) )
+        self.backoff_multiplier = 1
+        self.sent_frames = []
+        self.tosend_frames = []
+        self.ack = None
+        
+
+    def one_loop( self ):
+        if not self.medium.isIdle():
+            self.backoff_countdown.freeze()
+        else:
+            self.backoff_countdown.unfreeze()
+
+        data = self.recv()
+        if data.receiver == self.name:
+            #data is for us
+            if data == Frame:
+                self.frames.append(data)
+                self.ack = Ack(self.name, data.sender)
+
+            elif data == Ack:
+                self.frames.remove(data)
+
+    def acknowledge( self, frm ):
+        pass
+
+
+    def send(self, receiver):
+        self.tosend_frames.append(Frame(self.name, receiver))
+
+    def transmit( self ):
+
+        self.medium.put( self.tosend_frames.pop(0) )
+
+    def recv( self ):
+        try:
+            data = self.receiver.get()
+
+        except:
+            Emtpy
+            data = None
+
+        return data
+
+    def __repr__( self ):
+        return "Sation {}".format( self.name )
+
+    def DIFS_trigger( self ):
+        if len( self.tosend_frames ) > 0:
+            backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
+            self.backoff_countdown.start( backoff, self.send )
+
+    def SIFS_trigger( self ):
+        if self.ack:
+            self.send(self.ack)
+            self.ack = None
+
+
+
 class Station( Thread ):
     """The nodes of the network"""
     running = False
@@ -270,15 +336,24 @@ class Connection(Queue):
     """
 
 
-    def __init__(self, owner=None ):
-        self.Traverse_countdown = count_down(top=None, name="Traverse")
-        self.owner = owner
-        if not self.owner:
+    def __init__( self ):
+        self.traverse_countdown = count_down( top=None, name="Traverse" )
+        self.SIFS_countdown = count_down( top=None, name="SIFS" )
+        self.DIFS_countdown = count_down( top=None, name="DIFS" )
+        self.inTransit = None
+        self.DIFS_countdown.start(DIFS, self.DIFS_finish )
 
-            self.transmit = True
-        else:
-            self.transmit = False
+
+        self.secret_queue = Queue()
+
+
         super().__init__()
+
+
+    def register( self, counter ):
+        counter.register( self.traverse_countdown )
+        counter.register( self.SIFS_countdown )
+        counter.register( self.DIFS_countdown )
 
     def get( self, *args, **kwargs ):
         """Overwrite the get part of the queue
@@ -289,24 +364,88 @@ class Connection(Queue):
         The data frame and ack tranmissions are 
         triggered by the DIFS and SIFS trigger 
         function respectively"""
-        if self.owner:
 
-            
-            
+        if not self.secret_queue.empty():
+            #A transmission has arrived
+            data = self.secret_queue.get()
+
+            if data == Ack:
+                self.DIFS_countdown.start( top=SIFS )
+
+            elif data == Frame:
+                self.DIFS_countdown.start( top=DIFS )
+                
+
+
+        try:
             data = super().get( *args, **kwargs )
-            self.owner.sent_frames.append( data )
-            self.transmit = False
-            return data
-            
-        else:
-            return super().get( *args, **kwargs )
+        except Empty:
+            data = None
+
+        if data:
+            tx_time_s = data.size*8/TX_RATE 
+            tx_time_microseconds = tx_time_s*1e6
+            if self.isIdle():
+                self.traverse_countdown.start( tx_time_microseconds, self.tx_arrive, data )
+            else:
+                #Collisison cancel the transmission
+                self.traverse_countdown.cancel()
+                if self.traverse_countdown >= tx_time_microseconds:
+                    
+                    tx_time_microseconds = self.traverse_countdown
+
+                self.traverse_countdown.start( tx_time_microseconds, self.collision_arrive )
+
+            self.inTransit = data
+        return None
+        
 
 
     def put( self, msg, *args, **kwargs ):
-        print("the msg put is {}".format(msg) )
         super().put( msg, *args, **kwargs )
 
+    def tx_arrive( self, data ):
+        self.secret_queue.put( data )
+
+    def collision_arrive( self ):
+        print( "Collision" )
+        self.secret_queue.put( Collission() )
+
+    def isIdle( self ):
+
+        if self.inDIFS():
+            return False
+        elif self.inSIFS():
+            return False
+        elif self.traverse_countdown:
+            return False
+
+        else:
+            return True
+
+    def DIFS_finish(self):
+        print("DIFS is over")
+
+    def SIFS_finish(self):
+        print("SIFS is over")
+
+    def inDIFS( self ):
+        return bool( self.DIFS_countdown )
+
+    def inSIFS( self ):
+        return bool( self.SIFS_countdown )
     
+    def status( self ):
+        outstr = ""
+        if self.inDIFS():
+            outstr+="DIFS "
+        if  self.inSIFS():
+            outstr+="SIFS "
+        if self.isIdle():
+            outstr+="Idle"
+        if self.inTransit:
+            outstr+=str(self.iinTransit)
+        return outstr
 
 
 class Transmission():
@@ -318,26 +457,46 @@ class Transmission():
         self.receiver = receiver #address or name of receiver.
         self.uuid = uuid.uuid4()
 
-    def __repr__(self):
+    def __repr__( self ):
         return "<Frame sender: {} recver: {} tx_type:{}>".format(self.sender, self.receiver, self.tx_type)
 
+    def __eq__( self, other ):
+        if type(other) == type:
+            if self.__class__ == other:
+                return True
+            else:
+                return False
+        else:
+            if self.uuid == other.uuid:
+                return True
+            else:
+                return False
 
 
-class Ack(Transmission):
+class Collision( Transmission ):
+    tx_type = "Collision"
+    size = None
+
+    def __init__( self ):
+        self.sender = None
+        self.receiver = None
+
+
+class Ack( Transmission ):
     tx_type = "Ack"
     size = 30
 
-class Frame(Transmission):
+class Frame( Transmission ):
     tx_type = "Frame"
     size = 1500
 
-class RTS(Transmission):
+class RTS( Transmission ):
     pass
 
-class CTS(Transmission):
+class CTS( Transmission ):
     pass
 
-def poisson_distribution(Lambda=1, n=5):
+def poisson_distribution( Lambda=1, n=5 ):
     X = set() # set is handy for probability distributions
 
     for ITER in range(n):
@@ -351,7 +510,6 @@ def poisson_distribution(Lambda=1, n=5):
 
 def main():
     
-    shared_medium = Medium()
     A = Station( shared_medium, 'A' )
     B = Station( shared_medium, 'B' )
     C = Station( shared_medium, 'C' )
@@ -361,7 +519,15 @@ def main():
     B.start()
     C.start()
     D.start()
-    shared_medium.start()
+
+    counter = Counter()
+
+
+    for cnt in counter:
+        if cnt >  10000:
+            break
+
+
     print( "Attempting to send" )
     A.send( "B" )
     #C.send( "D" )
@@ -380,7 +546,33 @@ def main():
     D.join()
 
     shared_medium.kill()
-    shared_medium.join()
+    hared_medium.join()
 
 
-main()
+
+def main2(): 
+
+    conn = Connection()
+    A = Station2( conn , 'A' )
+    B = Station2( conn , 'B' )
+    C = Station2( conn , 'C' )
+    D = Station2( conn , 'D' )
+
+    counter = Counter(30000)
+    
+    conn.register( counter )
+
+    f=Frame("A", "B")
+    A.send("C")
+    for cnt in counter:
+        if cnt > 10000:
+            break
+        print( cnt, conn.status() )
+    
+
+main2()
+
+
+
+
+
