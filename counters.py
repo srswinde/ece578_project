@@ -14,7 +14,7 @@ class count_down:
         self.timing = False
         self.frozen = False
 
-    def __call__(self):
+    def __call__(self, decr):
         
         if self.timing:
             if self.count == 0:
@@ -27,7 +27,9 @@ class count_down:
 
             else:
                 if not self.frozen:
-                    self.count -= 1
+                    self.count -= decr
+
+            return self.count
 
         return self.count
 
@@ -40,7 +42,7 @@ class count_down:
         return self.timing
 
     def start( self, top=None, fxn=None, *args ):
-        if top:
+        if top is not None:
             self.top = top
         if self.top == None:
             raise ValueError("Need to set top of timer")
@@ -104,10 +106,11 @@ class Counter:
 
     def __init__(self, max_count, *registrants):
         self.max_count = max_count
-        self.count = -1
+        self.count = 0
         self.counting = True
         self.count_downers = []
         self.first_loop = True
+        self.increment = 10
 
 
         if registrants:
@@ -124,16 +127,15 @@ class Counter:
             if self.count == 0:
                 self.first_loop = False
 
-            self.count+= 1
+            self.count+= self.increment
             self.count%= self.max_count
 
 
             for cntdwner in self.count_downers:
                 #print( cntdwner )
-                cntdwner()
+                cntdwner(self.increment)
                 #if cntdwner: print( "\t", cntdwner )
                 #else: print("\t", cntdwner)
-                cntdwner()
             yield self.count
 
     def kill(self):
@@ -151,7 +153,7 @@ class Counter:
         outstr= ""
         for cntdwn in self.count_downers:
             if cntdwn:
-                outstr+=" "+cntdwn.name
+                outstr+="{}\n".format(cntdwn)
 
         return outstr
     
