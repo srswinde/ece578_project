@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 
 
+
+
 class count_down:
 
     def __init__ (self, top=None, name="no name", trigger_function=lambda :print("Ring RING!!"), *args ):
@@ -18,7 +20,10 @@ class count_down:
             if self.count == 0:
                 #edge detection: we changed from 1 to 0
                 self.timing = False
-                self.fxn( *self.args )
+                if self.args:
+                    self.fxn( *self.args )
+                else:
+                    self.fxn()
 
             else:
                 if not self.frozen:
@@ -30,6 +35,7 @@ class count_down:
     def cancel(self):
         self.timing = 0
         self.count  = self.top
+
     def __bool__( self ):
         return self.timing
 
@@ -61,19 +67,36 @@ class count_down:
         return self.count
 
     def __gt__(self, val):
-        
-        if self.count > val:
-            return True
+        if self.timing:
+            if self.count > val:
+                return True
+            else:
+                return False
         else:
             return False
 
     def __lt__(self, val):
         if self.timing:
             True
-        if self.count < val:
+            if self.count < val:
+                return True
+            else:
+                return False
+        else:
             return True
+
+    def __ge__(self, other):
+        if self.timing:
+            if self.count >= other:
+                return True
+            else:
+                return False
+
         else:
             return False
+
+
+
 
 
 
@@ -85,6 +108,7 @@ class Counter:
         self.counting = True
         self.count_downers = []
         self.first_loop = True
+
 
         if registrants:
             self.count_downers.extend(registrants)
@@ -122,7 +146,15 @@ class Counter:
     def __repr__(self):
         return "{} micro seconds".format(self.count)
 
-        
+    def status(self):
+
+        outstr= ""
+        for cntdwn in self.count_downers:
+            if cntdwn:
+                outstr+=" "+cntdwn.name
+
+        return outstr
+    
 
 
 def main():

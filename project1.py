@@ -50,10 +50,11 @@ class Station2:
     def one_loop( self ):
         if not self.medium.isIdle():
             self.backoff_countdown.freeze()
+
         else:
             self.backoff_countdown.unfreeze()
 
-        data = self.recv()
+        data = self.conn.get()
         if data.receiver == self.name:
             #data is for us
             if data == Frame:
@@ -63,8 +64,6 @@ class Station2:
             elif data == Ack:
                 self.frames.remove(data)
 
-    def acknowledge( self, frm ):
-        pass
 
 
     def send(self, receiver):
@@ -87,12 +86,12 @@ class Station2:
     def __repr__( self ):
         return "Sation {}".format( self.name )
 
-    def DIFS_trigger( self ):
+    def DIFS_finish( self ):
         if len( self.tosend_frames ) > 0:
             backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
             self.backoff_countdown.start( backoff, self.send )
 
-    def SIFS_trigger( self ):
+    def SIFS_finish( self ):
         if self.ack:
             self.send(self.ack)
             self.ack = None
@@ -336,13 +335,13 @@ class Connection(Queue):
     """
 
 
-    def __init__( self ):
+    def __init__( self, *stations ):
         self.traverse_countdown = count_down( top=None, name="Traverse" )
-        self.SIFS_countdown = count_down( top=None, name="SIFS" )
-        self.DIFS_countdown = count_down( top=None, name="DIFS" )
+        self.SIFS_countdown = count_down( top=None, name="SIFS", trigger_function = DIFS_finish )
+        self.DIFS_countdown = count_down( top=None, name="DIFS", trigger_function = SIFS_finish )
         self.inTransit = None
         self.DIFS_countdown.start(DIFS, self.DIFS_finish )
-
+        self.stations=stations
 
         self.secret_queue = Queue()
 
@@ -373,7 +372,7 @@ class Connection(Queue):
                 self.DIFS_countdown.start( top=SIFS )
 
             elif data == Frame:
-                self.DIFS_countdown.start( top=DIFS )
+                self.SIFS_countdown.start( top=DIFS )
                 
 
 
@@ -409,7 +408,7 @@ class Connection(Queue):
 
     def collision_arrive( self ):
         print( "Collision" )
-        self.secret_queue.put( Collission() )
+        self.secret_queue.put( Collision() )
 
     def isIdle( self ):
 
@@ -423,11 +422,11 @@ class Connection(Queue):
         else:
             return True
 
-    def DIFS_finish(self):
-        print("DIFS is over")
+    def DIFS_finish():
+        print( "DIFS is over" )
 
-    def SIFS_finish(self):
-        print("SIFS is over")
+    def SIFS_finish( self ):
+        print( "SIFS is over" )
 
     def inDIFS( self ):
         return bool( self.DIFS_countdown )
@@ -443,9 +442,13 @@ class Connection(Queue):
             outstr+="SIFS "
         if self.isIdle():
             outstr+="Idle"
+        if self.traverse_countdown:
+            outstr+=self.traverse_countdown.__repr__()
         if self.inTransit:
-            outstr+=str(self.iinTransit)
+
+            outstr+=str(self.inTransit)
         return outstr
+
 
 
 class Transmission():
@@ -508,6 +511,7 @@ def poisson_distribution( Lambda=1, n=5 ):
 
 
 
+
 def main():
     
     A = Station( shared_medium, 'A' )
@@ -549,25 +553,43 @@ def main():
     hared_medium.join()
 
 
+def DIFS_finish(*args):
+    for station in stations:
+        station.DIFS_finish()
+
+def SIFS_finish():
+    for station in stations:
+        sation.SIFS_finish()
 
 def main2(): 
-
     conn = Connection()
     A = Station2( conn , 'A' )
     B = Station2( conn , 'B' )
     C = Station2( conn , 'C' )
     D = Station2( conn , 'D' )
 
-    counter = Counter(30000)
     
-    conn.register( counter )
+    counter = Counter(30000)
+    DIFS_countdown = count_down( DIFS, "DIFS", DIFS_finish )
+    SIFS_countdown = count_down( SIFS, "SIFS", SIFS_finish )
+    counter.register(DIFS_countdown)
+    counter.register(SIFS_countdown)
+    DIFS_countdown.start()
 
-    f=Frame("A", "B")
-    A.send("C")
+    conn.register( counter )
+    pktsA = [ random.randint( 0, 20000 ) for a in range(10) ]
+    pktsB = [ random.randint( 0, 20000 ) for a in range(10) ]
+    
+    global stations
+    stations = (A, B, C, D)
+
     for cnt in counter:
         if cnt > 10000:
             break
-        print( cnt, conn.status() )
+        
+        #data = conn.get( block=False )
+        
+        print( counter.status() )
     
 
 main2()
