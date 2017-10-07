@@ -55,7 +55,7 @@ class Station2:
     def one_loop( self ):
         if self.backoff_countdown:
             if self.medium.isIdle():
-                self.backoff_countdown.unfreeze()
+                pass
             else:
 
                 self.backoff_countdown.freeze()
@@ -109,6 +109,9 @@ class Station2:
         return "Sation {}".format( self.name )
 
     def DIFS_finish( self ):
+        if self.sent_frame:
+            self.collision_count+=1
+            self.sent_frame = None
         if len( self.tosend_frames ) > 0:
             if self.medium.counter.count > self.tosend_frames[0].slot:
                 backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
@@ -116,6 +119,7 @@ class Station2:
                     self.backoff_countdown.unfreeze()
                 else:
                     self.backoff_countdown.start( top=backoff, fxn=self.send )
+
 
     def SIFS_finish( self ):
         if self.ack:
@@ -176,6 +180,9 @@ class Connection(Queue):
             for station in stations:
                 station.receiver.put(data)
 
+            if data == Collision:
+                self.SIFS_countdown.start( SIFS, self.wait_for_ack, Ack(data).size )
+
 
         try:
             data = super().get( *args, **kwargs )
@@ -196,12 +203,11 @@ class Connection(Queue):
             else:
                 #Collisison cancel the transmission
                 self.traverse_countdown.cancel()
-                print("collision happened here")
                 if self.traverse_countdown >= tx_time_microseconds:
                     
                     tx_time_microseconds = self.traverse_countdown
-
-                self.traverse_countdown.start( tx_time_microseconds, self.collision_arrive )
+                data = Collision()
+                self.traverse_countdown.start( tx_time_microseconds, self.secret_queue.put, data )
 
             self.inTransit = data
 
@@ -209,7 +215,12 @@ class Connection(Queue):
         return None
         
 
+    def wait_for_ack( self, acksize ):
+        tx_time_s = acksize*8/TX_RATE
+        tx_time_microseconds = tx_time_s*1e6
 
+        self.DIFS_countdown.start( tx_time_microseconds, self.DIFS_finish )
+        
     def put( self, msg, *args, **kwargs ):
         super().put( msg, *args, **kwargs )
 
@@ -275,7 +286,7 @@ class Transmission():
         self.uuid = uuid.uuid4()
 
     def __repr__( self ):
-        return "<TX sender: {} recver: {} tx_type:{}>".format(self.sender, self.receiver, self.tx_type)
+        return "<TX sender: {} recver: {} tx_type:{} uuid:{}>".format(self.sender, self.receiver, self.tx_type, self.uuid)
 
     def __eq__( self, other ):
         if type(other) == type:
@@ -295,10 +306,12 @@ class Transmission():
 class Collision( Transmission ):
     tx_type = "Collision"
     size = None
+    uuid = None
+    sender = None
+    receiver = None
 
     def __init__( self ):
-        self.sender = None
-        self.receiver = None
+        pass
 
 
 class Ack( Transmission ):
@@ -380,9 +393,9 @@ def main():
 
 
 
-def main2(): 
-    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(n=10000) ]
-    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(n=10000) ]
+def run_simulation(lambda_A, lambda_C ): 
+    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A, n=10000) ]
+    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C, n=10000) ]
     
     counter = Counter(1e10)
 
@@ -405,14 +418,18 @@ def main2():
         for station in stations:
             station.one_loop()
 
-        
+        """
         print( cnt )
         print( conn.inTransit )
         print( counter.status() )
+        """
         #print(cnt )
-    
 
-main2()
+
+    for station in stations:
+        print("{} success:{}, collisions:{}".format(station, station.success_count, station.collision_count))
+
+run_simulation(50, 2*50)
 
 
 
