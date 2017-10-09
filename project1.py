@@ -9,6 +9,8 @@ from counters import count_down, Counter
 import copy
 import sys
 import uuid
+import json
+import xlsxwriter
 
 # time in micro seconds
 SLOT = 20
@@ -36,8 +38,10 @@ FRAME_TX_TIME = FRAME
  
 
 
-class Station2:
-    def __init__(self, medium, name, tosend_frames):
+class Station:
+    """Simulates the nodes of the wireless network"""
+
+    def __init__(self, medium, name, tosend_frames, virtual_sense=False):
         self.medium = medium
         self.name = name
         self.receiver = Queue()
@@ -50,9 +54,13 @@ class Station2:
         self.ack = None
         self.success_count = 0
         self.collision_count = 0
+        if not virtual_sense:
+            self.clear_to_send = True
         
 
     def one_loop( self ):
+        """This is what we do every iteration
+        of the count."""
         if self.backoff_countdown:
             if self.medium.isIdle():
                 pass
@@ -60,13 +68,17 @@ class Station2:
 
                 self.backoff_countdown.freeze()
         
-
+        
 
         try:
+            #did we recv data?
             data = self.receiver.get(block=False)
         except Empty:
+            #... nope we didn't
             data = None
+
         if data:
+            #We have data
             if data.receiver == self.name:
                 #data is for us
                 if data == Frame:
@@ -74,16 +86,20 @@ class Station2:
 
                     self.medium.SIFS_countdown.start(SIFS, self.medium.put, Ack(data) )
                 elif data == Ack:
+                    #Data is an Ack we know our Frame was recvd
                     if data == self.sent_frame:
                         self.sent_frame = None
                         self.success_count+=1
+                        self.backoff_multiplier = 1
 
 
                     self.medium.DIFS_countdown.start(DIFS, self.medium.DIFS_finish )
 
             elif data == Collision:
+                #Collision our data was not sent. 
                 if self.sent_frame is None:
                     self.collision_count+=1
+                    self.backoff_multiplier+=1
 
 
 
@@ -94,17 +110,6 @@ class Station2:
             self.medium.put( self.sent_frame )
 
 
-
-    def recv( self ):
-        try:
-            data = self.receiver.get()
-
-        except:
-            Emtpy
-            data = None
-
-        return data
-
     def __repr__( self ):
         return "Sation {}".format( self.name )
 
@@ -112,8 +117,12 @@ class Station2:
         if self.sent_frame:
             self.collision_count+=1
             self.sent_frame = None
+
         if len( self.tosend_frames ) > 0:
+        #do we have a frame?
             if self.medium.counter.count > self.tosend_frames[0].slot:
+            #Is it time to send the frame?
+
                 backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
                 if self.backoff_countdown:
                     self.backoff_countdown.unfreeze()
@@ -135,6 +144,10 @@ class Connection(Queue):
     Here we can overwrite the methods
     put and get. this will give us access
     to the receiving and transmitting. 
+
+    This class simulates the shared medium 
+    and starts the countdown for the 
+    a packet to share the medium. 
     """
 
 
@@ -157,14 +170,7 @@ class Connection(Queue):
         self.counter.register( self.DIFS_countdown )
 
     def get( self, *args, **kwargs ):
-        """Overwrite the get part of the queue
-        Here we check to see if there is an ack
-        waiting for transmission. If so we transmit
-        to the medium. If not we check for a 
-        a data frame waiting to be transmitted. 
-        The data frame and ack tranmissions are 
-        triggered by the DIFS and SIFS trigger 
-        function respectively"""
+        """"""
 
         if not self.secret_queue.empty():
             #A transmission has arrived
@@ -329,7 +335,7 @@ class Ack( Transmission ):
 
 class Frame( Transmission ):
     tx_type = "Frame"
-    size = 150
+    size = 1500
 
 
 class RTS( Transmission ):
@@ -349,69 +355,34 @@ def poisson_distribution( Lambda=1, n=5 ):
 
 
 
-
-
-def main():
-    
-    A = Station( shared_medium, 'A' )
-    B = Station( shared_medium, 'B' )
-    C = Station( shared_medium, 'C' )
-    D = Station( shared_medium, 'D' )
-    
-    A.start()
-    B.start()
-    C.start()
-    D.start()
-
-    counter = Counter()
-
-
-    for cnt in counter:
-        if cnt >  10000:
-            break
-
-
-    print( "Attempting to send" )
-    A.send( "B" )
-    #C.send( "D" )
-    time.sleep( 5 )   
-
-    A.kill()
-    A.join()
-
-    B.kill()
-    B.join()
-
-    C.kill()
-    C.join()
-
-    D.kill()
-    D.join()
-
-    shared_medium.kill()
-    hared_medium.join()
-
-
-
 def run_simulation(lambda_A, lambda_C ): 
+    """Run the simulation at different lambdas"""
+    simtime = 10e6 # time in microsecond, 10 seconds
+
+    #generate the Frames to be sent of the simulation
     a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A, n=10000) ]
     c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C, n=10000) ]
     
+    #start the counter class
     counter = Counter(1e10)
 
+    #Connection class simulates the shared medium. 
     conn = Connection(counter)
     conn.register( )
-    A = Station2( conn , 'A', a2b )
-    B = Station2( conn , 'B', [] )
-    C = Station2( conn , 'C', c2d )
-    D = Station2( conn , 'D', [] )
 
+    #The stations connected to the shared medium.
+    A = Station( conn , 'A', a2b )
+    B = Station( conn , 'B', [] )
+    C = Station( conn , 'C', c2d )
+    D = Station( conn , 'D', [] )
 
+    #make the stations global for convienience. 
     global stations
     stations = (A, B, C, D)
 
+    #count up in micro seconds stop at 10 seconds. 
     for cnt in counter:
-        if cnt > 10e6:
+        if cnt > simtime:
             break
         
         data = conn.get( block=False )
@@ -423,15 +394,73 @@ def run_simulation(lambda_A, lambda_C ):
         print( conn.inTransit )
         print( counter.status() )
         """
-        #print(cnt )
 
 
+    
     for station in stations:
-        print("{} success:{}, collisions:{}".format(station, station.success_count, station.collision_count))
 
-run_simulation(50, 2*50)
+        print("{} success:{}, collisions:{} Throughput {}".format( station, 
+            station.success_count, 
+            station.collision_count,
+            station.success_count*Frame.size*8/(simtime/1e6)) )
+
+    return { 
+                "A":A.success_count*Frame.size*8/(simtime/1e6), 
+                "C": C.success_count*Frame.size*8/(simtime/1e6),
+                "Throughput":(A.success_count+C.success_count)*Frame.size*8/(simtime/1e6),
+                "Collisions": A.collision_count,
+                "Fairness":float(A.success_count)/C.success_count
+                }
+
+
+def main():
+
+    workbook_names = ["nodeA_scenarioA_implementation1", "nodeC_scenarioA_implementation1", "nodeA_scenarioB_implementation2", "nodeC_scenarioB_implementation2"]
+    workbooks = {}
+    worksheets = {}
+
+    dataid = 1
+    for wbname in workbook_names:
+        workbooks[wbname] = xlsxwriter.Workbook("{}.xlsx".format(wbname))
+
+        worksheets[wbname] = workbooks[wbname].add_worksheet()
+        worksheets[wbname].write_number(0, 0 , dataid)
+        dataid+=1
+    row = 1
+    col = 0
+
+    
+
+    outjson = []
+    for (Lambda) in ( 50.0, 100.0, 200.0, 300.0 ):
+            
+
+        simdata = run_simulation( Lambda, Lambda ) 
+        worksheets["nodeA_scenarioA_implementation1"].write_number( row, col, Lambda )
+        worksheets["nodeC_scenarioA_implementation1"].write_number( row, col, simdata["A"] )
+
+
+        worksheets["nodeC_scenarioA_implementation1"].write_number( row, col, Lambda )
+        worksheets["nodeC_scenarioA_implementation1"].write_number( row, col, simdata["C"] )
+
+        col+=1
+
+
+        
+    for nm in workbook_names:
+        workbooks[nm].close()
+
+
+    #for (Lambda) in ( 50.0, 100, 200.0, 300.0 ):
+
+        #outjson.append( { "twolambda_onelambda":run_simulation( 2*Lambda, Lambda ) } )
+    
+        
 
 
 
+main()
+
+            
 
 
