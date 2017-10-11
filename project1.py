@@ -168,14 +168,19 @@ class Station:
         else:#virtual sense
 
             if len( self.tosend_frames ) > 0:
-                self.backoff_countdown.unfreeze()
-                if self.backoff_countdown:
-                    pass
+                # we have frames to send
+
+                if self.medium.counter.count > self.tosend_frames[0].slot:
+                    #they have arrived
+
+                    self.backoff_countdown.unfreeze()
+                    if self.backoff_countdown:
+                        pass
                     
-                else:
-                    backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
-                    self.sentRTS = RTS(self.name, "B")
-                    self.backoff_countdown.start( backoff, self.medium.put, self.sentRTS )
+                    else:
+                        backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
+                        self.sentRTS = RTS(self.name, "B")
+                        self.backoff_countdown.start( backoff, self.medium.put, self.sentRTS )
 
 
 
@@ -299,6 +304,15 @@ class Connection(Queue):
     def DIFS_finish( self ):
         for station in stations:
             station.DIFS_finish()
+        transmitting  = False
+        for station in stations:
+            for station in stations:
+                if station.backoff_countdown:
+                    transmitting = True
+
+        if not transmitting:
+            self.DIFS_countdown.start( DIFS, self.DIFS_finish )
+        
 
 
     def SIFS_finish( self ):
@@ -338,7 +352,7 @@ class Transmission():
         self.uuid = uuid.uuid4()
 
     def __repr__( self ):
-        return "<TX sender: {} recver: {} tx_type:{} uuid:{}>".format(self.sender, self.receiver, self.tx_type, self.uuid)
+        return "<TX sender: {} recver: {} tx_type:{} slot:{} uuid:{}>".format(self.sender, self.receiver, self.tx_type, self.slot, self.uuid)
 
     def __eq__( self, other ):
         if type(other) == type:
@@ -361,6 +375,7 @@ class Collision( Transmission ):
     uuid = None
     sender = None
     receiver = None
+    slot=None
 
     def __init__( self ):
         pass
@@ -369,6 +384,7 @@ class Collision( Transmission ):
 class Ack( Transmission ):
     tx_type = "Ack"
     size = 30
+    slot=None
 
     def __init__(self, frame):
         if frame != Collision:
@@ -392,6 +408,7 @@ class CTS( Transmission ):
 
     tx_type = "CTS"
     size = 30
+    slot=None
 
     def __init__(self, rts):
         self.sender = rts.receiver
@@ -402,13 +419,13 @@ def poisson_distribution( Lambda=1, simtime=10 ):
     X = []
     x=0
 
+    dummy = 0
 
-    #lambda is in frames/sec it needs to be in frames/microsec
     while x < simtime:
         u = random.random() # random number between 0  and 1
-        x+=(-1/Lambda)*math.log(1-u)
-        int( SLOT*round( float( x ) /6 ) )
-        X.append(x*1e6)
+        dummy =((-1/Lambda)*math.log(1-u))
+        x+=dummy
+        X.append(int(SLOT*round(x*1e6/SLOT)))
         
     return X
 
