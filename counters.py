@@ -6,7 +6,10 @@
 class count_down:
 
     def __init__ (self, top=None, name="no name", trigger_function=lambda :print("Ring RING!!"), *args ):
+
         self.top = top
+        if top:
+            self.top+=10
         self.count = self.top
         self.fxn = trigger_function
         self.args = args
@@ -43,7 +46,7 @@ class count_down:
 
     def start( self, top=None, fxn=None, *args ):
         if top is not None:
-            self.top = top
+            self.top = top+10
         if self.top == None:
             raise ValueError("Need to set top of timer")
         
