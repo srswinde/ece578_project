@@ -14,7 +14,7 @@ import xlsxwriter
 
 # time in micro seconds
 SLOT = 20
-SIFS = 10
+SIFS = 20
 DIFS = 40
 
 
@@ -54,6 +54,8 @@ class Station:
         self.ack = None
         self.success_count = 0
         self.collision_count = 0
+        self.virtual_sense = virtual_sense
+        self.sentRTS = None
         if not virtual_sense:
             self.clear_to_send = True
         
@@ -62,13 +64,9 @@ class Station:
         """This is what we do every iteration
         of the count."""
         if self.backoff_countdown:
-            if self.medium.isIdle():
-                pass
-            else:
-
+            if not self.medium.isIdle():
                 self.backoff_countdown.freeze()
-        
-        
+
 
         try:
             #did we recv data?
@@ -82,10 +80,12 @@ class Station:
             if data.receiver == self.name:
                 #data is for us
                 if data == Frame:
+                    
                     self.received_frames.append(data)
-
                     self.medium.SIFS_countdown.start(SIFS, self.medium.put, Ack(data) )
                 elif data == Ack:
+
+                    print("we recved an ack ", data)
                     #Data is an Ack we know our Frame was recvd
                     if data == self.sent_frame:
                         self.sent_frame = None
@@ -94,6 +94,23 @@ class Station:
 
 
                     self.medium.DIFS_countdown.start(DIFS, self.medium.DIFS_finish )
+                elif data == RTS:
+                    if data.sender is not self.name:
+
+                        self.sentCTS = CTS( data )
+                        self.medium.SIFS_countdown.start( SIFS, self.medium.put, self.sentCTS )
+
+                elif data == CTS:
+
+                    if self.sentRTS:
+                        if self.sentRTS == data:
+                            self.medium.SIFS_countdown.start( SIFS, self.send )
+
+                        self.backoff_countdown.freeze()
+
+
+
+
 
             elif data == Collision:
                 #Collision our data was not sent. 
@@ -104,9 +121,10 @@ class Station:
 
 
 
-    def send (self ):
-        if self.medium.isIdle():
+    def send ( self ):
+        if self.medium.isIdle() or self.clear_to_send:
             self.sent_frame = self.tosend_frames.pop(0)
+
             self.medium.put( self.sent_frame )
 
 
@@ -114,26 +132,44 @@ class Station:
         return "Sation {}".format( self.name )
 
     def DIFS_finish( self ):
-        if self.sent_frame:
-            self.collision_count+=1
-            self.sent_frame = None
+        if not self.virtual_sense:
+            self.backoff_countdown.unfreeze()
+            if self.sent_frame:
+                self.sent_frame = None
 
-        if len( self.tosend_frames ) > 0:
-        #do we have a frame?
-            if self.medium.counter.count > self.tosend_frames[0].slot:
-            #Is it time to send the frame?
+            if len( self.tosend_frames ) > 0:
+            #do we have a frame?
+                if self.medium.counter.count > self.tosend_frames[0].slot:
+                #Is it time to send the frame?
 
+                    backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
+                    if self.backoff_countdown:
+                        self.backoff_countdown.unfreeze()
+                    else:
+                        self.backoff_countdown.start( top=backoff, fxn=self.send )
+
+            else:
+                self.clear_to_send = False
+                if len( self.tosend_frames ) > 0:
+                    if self.medium.counter.count > self.tosend_frames[0].slot:
+                        backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
+                        if self.backoff_countdown:
+                            self.backoff_countdown.unfreeze()
+                        else:
+                            self.backoff_countdown.start( top=backoff, fxn=self.send )
+
+        else:#virtual sense
+            if self.backoff_countdown:
+                
+                self.backoff_countdown.unfreeze()
+            else:
                 backoff = random.randint( 0, CW*self.backoff_multiplier )*SLOT
-                if self.backoff_countdown:
-                    self.backoff_countdown.unfreeze()
-                else:
-                    self.backoff_countdown.start( top=backoff, fxn=self.send )
+                self.sentRTS = RTS(self.name, "B")
+                self.backoff_countdown.start( backoff, self.medium.put, self.sentRTS )
 
 
-    def SIFS_finish( self ):
-        if self.ack:
-            self.send(self.ack)
-            self.ack = None
+
+
 
 
 
@@ -339,10 +375,18 @@ class Frame( Transmission ):
 
 
 class RTS( Transmission ):
-    pass
+    tx_type = "RTS"
+    size = 30
 
 class CTS( Transmission ):
-    pass
+
+    tx_type = "CTS"
+    size = 30
+
+    def __init__(self, rts):
+        self.sender = rts.receiver
+        self.receiver = rts.sender
+        self.uuid = rts.uuid
 
 def poisson_distribution( Lambda=1, n=5 ):
     X = set() # set is handy for probability distributions
@@ -355,13 +399,68 @@ def poisson_distribution( Lambda=1, n=5 ):
 
 
 
-def run_simulation(lambda_A, lambda_C ): 
+def run_simulation_scenarioA(lambda_A, lambda_C ):
+    """Run the simulation at different lambdas"""
+    simtime = 10e6 # time in microsecond, 10 seconds
+
+    #generate the Frames to be sent of the simulation
+    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A, n=100000) ]
+    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C, n=100000) ]
+    
+    #start the counter class
+    counter = Counter(simtime*2)
+
+    #Connection class simulates the shared medium. 
+    conn = Connection(counter)
+    conn.register( )
+
+    #The stations connected to the shared medium.
+    A = Station( conn , 'A', a2b, False)
+    B = Station( conn , 'B', [], False )
+    C = Station( conn , 'C', c2d, False )
+    D = Station( conn , 'D', [], False )
+
+    #make the stations global for convienience. 
+    global stations
+    stations = (A, B, C, D)
+
+    #count up in micro seconds stop at 10 seconds. 
+    for cnt in counter:
+        if cnt > simtime:
+            break
+        
+        data = conn.get( block=False )
+        for station in stations:
+            station.one_loop()
+
+        print( cnt )
+        print( conn.inTransit )
+
+        print( counter.status() )
+
+    
+    for station in stations:
+
+        print("{} success:{}, collisions:{} Throughput {}".format( station, 
+            station.success_count, 
+            station.collision_count,
+            station.success_count*Frame.size*8/(simtime/1e6)) )
+
+    return { 
+                "A":A.success_count*Frame.size*8/(simtime/1e6), 
+                "C": C.success_count*Frame.size*8/(simtime/1e6),
+                "Throughput":(A.success_count+C.success_count)*Frame.size*8/(simtime/1e6),
+                "Collisions": A.collision_count,
+                "Fairness":float(A.success_count)/C.success_count
+                }
+
+def run_simulation_scenarioB(lambda_A, lambda_C ): 
     """Run the simulation at different lambdas"""
     simtime = 10e6 # time in microsecond, 10 seconds
 
     #generate the Frames to be sent of the simulation
     a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A, n=10000) ]
-    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C, n=10000) ]
+    c2d = [Frame("C", "B", slot) for slot in poisson_distribution(Lambda=lambda_C, n=10000) ]
     
     #start the counter class
     counter = Counter(1e10)
@@ -371,14 +470,14 @@ def run_simulation(lambda_A, lambda_C ):
     conn.register( )
 
     #The stations connected to the shared medium.
-    A = Station( conn , 'A', a2b )
-    B = Station( conn , 'B', [] )
-    C = Station( conn , 'C', c2d )
-    D = Station( conn , 'D', [] )
+    A = Station( conn , 'A', a2b, True )
+    B = Station( conn , 'B', [], True )
+    C = Station( conn , 'C', c2d, True )
+    D = Station( conn , 'D', [], True )
 
     #make the stations global for convienience. 
     global stations
-    stations = (A, B, C, D)
+    stations = (A, B, C)
 
     #count up in micro seconds stop at 10 seconds. 
     for cnt in counter:
@@ -411,6 +510,11 @@ def run_simulation(lambda_A, lambda_C ):
                 "Collisions": A.collision_count,
                 "Fairness":float(A.success_count)/C.success_count
                 }
+
+
+def test():
+
+    run_simulation_scenarioA(50, 50)
 
 
 def main():
@@ -459,8 +563,7 @@ def main():
 
 
 
-main()
-
+test()
             
 
 
