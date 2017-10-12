@@ -680,22 +680,26 @@ def main():
 
 
 
-def throughput(injson=open("simulation.json")):
 
-    data = json.load(injson)
+
+def throughput(station, imp, dname, indexname, data):
 
     row=0
     col=0
     
-    workbook  = xlsxwriter.Workbook("tputnormalA.xlsx")
+    if imp == "imp1":
+        workbook  = xlsxwriter.Workbook("{}normal{}.xlsx".format( dname, station ) )
+    elif imp == "imp2":
+        workbook  = xlsxwriter.Workbook("{}2lamdba{}.xlsx".format( dname, station ) )
+
     worksheet = workbook.add_worksheet()
-    worksheet.write_number(row, col, 1)
+    worksheet.write_number( row, col, 1 )
     row+=1
     
-    worksheet.write_number(row, col, 50)
-    worksheet.write_number(row, col+1, 100)
-    worksheet.write_number(row, col+2, 200)
-    worksheet.write_number(row, col+3, 300)
+    worksheet.write_number( row, col, 50 ) 
+    worksheet.write_number( row, col+1, 100 )
+    worksheet.write_number( row, col+2, 200 )
+    worksheet.write_number( row, col+3, 300 )
 
     col=0
     
@@ -703,16 +707,23 @@ def throughput(injson=open("simulation.json")):
         for scenario in ( "scenA", "scenB" ):
             row=2
             for Lambda in ( 50, 100, 200, 300 ):
-                index = "{}imp1{}{}".format( CSMA, scenario, Lambda )
-                worksheet.write_number( row, col, data[index]["A"] )
+                index = "{}{}{}{}".format( CSMA, imp, scenario, Lambda )
+                worksheet.write_number( row, col, data[index][indexname] )
                 #worksheet.add_number( row, col, data[index]["A"]  )
                 row+=1
             col+=1
 
 
-
-throughput()
     
+
+data = json.load( open( "simulation.json" ) )
+for station in ( '', ):
+   for imp in ( 'imp1', "imp2" ):
+        print( station, imp )
+        throughput( station, imp, "Fairness", "Fairness", data )
+
+
+
     
 
 
