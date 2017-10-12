@@ -56,6 +56,10 @@ class Station:
         self.collision_count = 0
         self.virtual_sense = virtual_sense
         self.sentRTS = None
+        with open("{}_frames.dat".format(self.name), "w") as fd:
+            for frame in tosend_frames:
+                fd.write( "{:f} 1\n".format(frame.slot) )
+
         if not virtual_sense:
             self.clear_to_send = True
         
@@ -83,7 +87,7 @@ class Station:
             #We have data
             if data == Collision:
                 self.collision_count+=1
-                print("acollision")
+                
             if data.receiver == self.name:
 
                 #data is for us
@@ -99,11 +103,10 @@ class Station:
 
                 
                 elif data == Ack:
-
-                    print("we recved an ack ", data)
                     #Data is an Ack we know our Frame was recvd
                     if data == self.sent_frame:
                         self.sent_frame = None
+                        self.success_count+=1
                         self.backoff_multiplier = 1
 
 
@@ -120,7 +123,6 @@ class Station:
                         if self.sentRTS == data:
                             self.medium.SIFS_countdown.start( SIFS, self.send )
                             self.success_count+=1
-                            print( self, "adding success count", self.success_count )
 
                         self.backoff_countdown.freeze()
 
@@ -215,6 +217,7 @@ class Connection(Queue):
         self.counter.register( self.traverse_countdown )
         self.counter.register( self.SIFS_countdown )
         self.counter.register( self.DIFS_countdown )
+        self.outfile = open("Connection.dat", 'w')
 
         super().__init__()
 
@@ -248,6 +251,7 @@ class Connection(Queue):
 
         if self.DIFS_countdown:
             self.inTransit = None
+
         elif self.SIFS_countdown:
             self.inTransit = None
 
@@ -268,7 +272,7 @@ class Connection(Queue):
 
             self.inTransit = data
 
-
+        self.writestatus()
         return None
         
 
@@ -285,7 +289,6 @@ class Connection(Queue):
         self.secret_queue.put( data )
 
     def collision_arrive( self ):
-        print( "Collision" )
         self.secret_queue.put( Collision() )
 
 
@@ -323,6 +326,13 @@ class Connection(Queue):
 
     def inSIFS( self ):
         return bool( self.SIFS_countdown )
+
+    def writestatus(self):
+
+        self.outfile.write("{:f} {:d} {:d} {:d}\n".format( self.counter.count, self.inDIFS(), self.inSIFS(), self.inTransit is not None) )
+
+
+
     
     def status( self ):
         outstr = ""
@@ -433,13 +443,13 @@ def poisson_distribution( Lambda=1, simtime=10 ):
 
 
 
-def run_simulation_scenarioA(lambda_A, lambda_C ):
+def run_sim_scenarioA_CSMA1(lambda_A, lambda_C ):
     """Run the simulation at different lambdas"""
     simtime = 10e6 # time in microsecond, 10 seconds
 
     #generate the Frames to be sent of the simulation
-    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A, n=100000) ]
-    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C, n=100000) ]
+    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A) ]
+    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C) ]
     
     #start the counter class
     counter = Counter(simtime*2)
@@ -448,7 +458,7 @@ def run_simulation_scenarioA(lambda_A, lambda_C ):
     conn = Connection(counter)
 
     #The stations connected to the shared medium.
-    A = Station( conn , 'A', a2b, False)
+    A = Station( conn , 'A', a2b, False )
     B = Station( conn , 'B', [], False )
     C = Station( conn , 'C', c2d, False )
     D = Station( conn , 'D', [], False )
@@ -465,12 +475,12 @@ def run_simulation_scenarioA(lambda_A, lambda_C ):
         data = conn.get( block=False )
         for station in stations:
             station.one_loop()
-
+        """
         print( cnt )
         print( conn.inTransit )
 
         print( counter.status() )
-    
+        """
     for station in stations:
 
         print("{} success:{}, collisions:{} Throughput {}".format( station, 
@@ -487,9 +497,103 @@ def run_simulation_scenarioA(lambda_A, lambda_C ):
                 }
 
 
+def run_sim_scenarioA_CSMA2(lambda_A, lambda_C ):
+    """Run the simulation at different lambdas"""
+    simtime = 10e6 # time in microsecond, 10 seconds
+
+    #generate the Frames to be sent of the simulation
+    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A) ]
+    c2d = [Frame("C", "D", slot) for slot in poisson_distribution(Lambda=lambda_C) ]
+    
+    #start the counter class
+    counter = Counter(simtime*2)
+
+    #Connection class simulates the shared medium. 
+    conn = Connection(counter)
+
+    #The stations connected to the shared medium.
+    A = Station( conn , 'A', a2b, True )
+    B = Station( conn , 'B', [], True )
+    C = Station( conn , 'C', c2d, True )
+    D = Station( conn , 'D', [], True )
+
+    #make the stations global for convienience. 
+    global stations
+    stations = (A, B, C, D)
+
+    #count up in micro seconds stop at 10 seconds. 
+    for cnt in counter:
+        if cnt > simtime:
+            break
+        
+        data = conn.get( block=False )
+        for station in stations:
+            station.one_loop()
+        """
+        print( cnt )
+        print( conn.inTransit )
+
+        print( counter.status() )
+        """
+    for station in stations:
+
+        print("{} success:{}, collisions:{} Throughput {}".format( station, 
+            station.success_count, 
+            station.collision_count,
+            station.success_count*Frame.size*8/(simtime/1e6)) )
+
+    return { 
+                "A":A.success_count*Frame.size*8/(simtime/1e6), 
+                "C": C.success_count*Frame.size*8/(simtime/1e6),
+                "Throughput":(A.success_count+C.success_count)*Frame.size*8/(simtime/1e6),
+                "Collisions": A.collision_count,
+                "Fairness":float(A.success_count)/C.success_count
+                }
 
 
-def run_sim_scenarioB(lambda_A, lambda_C ): 
+def run_sim_scenarioB_CSMA1(lambda_A, lambda_C ): 
+    """Run the simulation at different lambdas"""
+    simtime = 10e6 # time in microsecond, 10 seconds
+
+    #generate the Frames to be sent of the simulation
+    a2b = [Frame("A", "B", slot) for slot in poisson_distribution(Lambda=lambda_A) ]
+    c2b = [Frame("C", "B", slot) for slot in poisson_distribution(Lambda=lambda_C) ]
+    
+    #start the counter class
+    counter = Counter(1e10)
+
+    #Connection class simulates the shared medium. 
+    conn = Connection(counter)
+
+    #The stations connected to the shared medium.
+    A = Station( conn , 'A', a2b, False )
+    B = Station( conn , 'B', [], False )
+    C = Station( conn , 'C', c2b, False )
+
+    #make the stations global for convienience. 
+    global stations
+    stations = (A, B, C)
+
+    #count up in micro seconds stop at 10 seconds. 
+    for cnt in counter:
+        if cnt > simtime:
+            break
+        
+        data = conn.get( block=False )
+        for station in stations:
+            station.one_loop()
+
+    return { 
+                "A":A.success_count*Frame.size*8/(simtime/1e6), 
+                "C": C.success_count*Frame.size*8/(simtime/1e6),
+                "Throughput":(A.success_count+C.success_count)*Frame.size*8/(simtime/1e6),
+                "Collisions": A.collision_count,
+                "Fairness":float(A.success_count)/C.success_count
+                }
+
+
+
+def run_sim_scenarioB_CSMA2(lambda_A, lambda_C ): 
     """Run the simulation at different lambdas"""
     simtime = 10e6 # time in microsecond, 10 seconds
 
@@ -521,10 +625,14 @@ def run_sim_scenarioB(lambda_A, lambda_C ):
         data = conn.get( block=False )
         for station in stations:
             station.one_loop()
+
+
+        """
         print( cnt )
         print( conn.inTransit )
         print( counter.status() )
         print( B.tosend_frames )
+        """
 
     for station in stations:
 
@@ -545,52 +653,70 @@ def run_sim_scenarioB(lambda_A, lambda_C ):
 
 
 
+
 def main():
 
-    workbook_names = ["nodeA_scenarioA_implementation1", "nodeC_scenarioA_implementation1", "nodeA_scenarioB_implementation2", "nodeC_scenarioB_implementation2"]
-
-    scenarios = ['A', 'B']
-
-    workbooks = {}
-    worksheets = {}
-
-    dataid = 1
-    for wbname in workbook_names:
-        workbooks[wbname] = xlsxwriter.Workbook("{}.xlsx".format(wbname))
-
-        worksheets[wbname] = workbooks[wbname].add_worksheet()
-        worksheets[wbname].write_number(0, 0 , dataid)
-        dataid+=1
-    row = 1
-    col = 0
 
     
+    
+    outjson = {}
+    for Lambda in (50, 100, 200, 300 ):
+        #implementation 1
+        outjson["CSMA1imp1scenA{}".format(Lambda)] = run_sim_scenarioA_CSMA1( Lambda, Lambda ) 
+        outjson["CSMA2imp1scenA{}".format(Lambda)] = run_sim_scenarioA_CSMA2( Lambda, Lambda )
+        outjson["CSMA1imp1scenB{}".format(Lambda)] = run_sim_scenarioB_CSMA1( Lambda, Lambda ) 
+        outjson["CSMA2imp1scenB{}".format(Lambda)] = run_sim_scenarioB_CSMA2( Lambda, Lambda ) 
+
+
+        #implementation 2 ( Lambda_A = 2*Lambda )
+        outjson["CSMA1imp2scenA{}".format(Lambda)] = run_sim_scenarioA_CSMA1( 2*Lambda, Lambda ) 
+        outjson["CSMA2imp2scenA{}".format(Lambda)] = run_sim_scenarioA_CSMA2( 2*Lambda, Lambda ) 
+        outjson["CSMA1imp2scenB{}".format(Lambda)] = run_sim_scenarioB_CSMA1( 2*Lambda, Lambda ) 
+        outjson["CSMA2imp2scenB{}".format(Lambda)] = run_sim_scenarioB_CSMA2( 2*Lambda, Lambda ) 
+
 
     
-    for (Lambda) in ( 50.0, 100, 200, 300 ):
-         
-
-        simdata = run_simulation_scenarioA( Lambda, Lambda )
-        worksheets["nodeA_scenarioA_implementation1"].write_number( row, col, Lambda )
-        worksheets["nodeC_scenarioA_implementation1"].write_number( row, col, simdata["A"] )
+    json.dump( outjson, open("simulation.json", 'w') )
 
 
-        worksheets["nodeC_scenarioA_implementation1"].write_number( row, col, Lambda )
-        worksheets["nodeC_scenarioA_implementation1"].write_number( row, col, simdata["C"] )
 
-        col+=1
+def throughput(injson=open("simulation.json")):
 
+    data = json.load(injson)
 
-        
-    for nm in workbook_names:
-        workbooks[nm].close()
-
-
-    #for (Lambda) in ( 50.0, 100, 200.0, 300.0 ):
-
-        #outjson.append( { "twolambda_onelambda":run_simulation( 2*Lambda, Lambda ) } )
+    row=0
+    col=0
     
-        
+    workbook  = xlsxwriter.Workbook("tputnormalA.xlsx")
+    worksheet = workbook.add_worksheet()
+    worksheet.write_number(row, col, 1)
+    row+=1
+    
+    worksheet.write_number(row, col, 50)
+    worksheet.write_number(row, col+1, 100)
+    worksheet.write_number(row, col+2, 200)
+    worksheet.write_number(row, col+3, 300)
+
+    col=0
+    
+    for CSMA in ( "CSMA1", "CSMA2" ):
+        for scenario in ( "scenA", "scenB" ):
+            row=2
+            for Lambda in ( 50, 100, 200, 300 ):
+                index = "{}imp1{}{}".format( CSMA, scenario, Lambda )
+                worksheet.write_number( row, col, data[index]["A"] )
+                #worksheet.add_number( row, col, data[index]["A"]  )
+                row+=1
+            col+=1
 
 
-print (run_sim_scenarioB(50, 50) )
+
+throughput()
+    
+    
+
+
+
+
+
+
