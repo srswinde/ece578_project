@@ -701,17 +701,17 @@ def throughput(station, imp, dname, indexname, data):
     worksheet.write_number( row, col+2, 200 )
     worksheet.write_number( row, col+3, 300 )
 
-    col=0
-    
+    row=0
     for CSMA in ( "CSMA1", "CSMA2" ):
         for scenario in ( "scenA", "scenB" ):
-            row=2
+            col=2
             for Lambda in ( 50, 100, 200, 300 ):
                 index = "{}{}{}{}".format( CSMA, imp, scenario, Lambda )
-                worksheet.write_number( row, col, data[index][indexname] )
+                print("{} {} {}".format(index,  indexname, data[index][indexname]))
+                worksheet.write_number( col, row, data[index][indexname]/1000.0 )
                 #worksheet.add_number( row, col, data[index]["A"]  )
-                row+=1
-            col+=1
+                col+=1
+            row+=1
 
 
     
@@ -719,8 +719,10 @@ def throughput(station, imp, dname, indexname, data):
 data = json.load( open( "simulation.json" ) )
 for station in ( '', ):
    for imp in ( 'imp1', "imp2" ):
-        print( station, imp )
         throughput( station, imp, "Fairness", "Fairness", data )
+
+
+
 
 
 
